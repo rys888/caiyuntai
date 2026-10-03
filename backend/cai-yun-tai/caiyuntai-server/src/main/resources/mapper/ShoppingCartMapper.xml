@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.caiyuntai.mapper.ShoppingCartMapper">
+
+    <!--
+      注意：这里不能写 select *。
+      数据库列名仍是 dish_id / setmeal_id / dish_flavor（表结构未改），
+      而实体字段已改名为 goodsId / comboId / goodsSpec，
+      靠驼峰自动映射对不上，必须显式给列起别名，否则这三个字段查出来是 null。
+    -->
+    <select id="list" resultType="com.caiyuntai.entity.ShoppingCart">
+        select id, name, user_id, image,
+               dish_id     as goodsId,
+               setmeal_id  as comboId,
+               dish_flavor as goodsSpec,
+               number, amount, create_time
+        from shopping_cart
+        <where>
+            <if test="userId != null">
+                and user_id = #{userId}
+            </if>
+            <if test="comboId != null">
+                and setmeal_id = #{comboId}
+            </if>
+            <if test="goodsId != null">
+                and dish_id = #{goodsId}
+            </if>
+            <if test="goodsSpec != null">
+                and dish_flavor = #{goodsSpec}
+            </if>
+        </where>
+    </select>
+
+    <insert id="insertBatch" parameterType="list">
+        insert into shopping_cart (name, image, user_id, dish_id, setmeal_id, dish_flavor, number, amount, create_time)
+        values
+        <foreach collection="shoppingCartList" item="sc" separator=",">
+            (#{sc.name},#{sc.image},#{sc.userId},#{sc.goodsId},#{sc.comboId},#{sc.goodsSpec},#{sc.number},#{sc.amount},#{sc.createTime})
+        </foreach>
+    </insert>
+</mapper>

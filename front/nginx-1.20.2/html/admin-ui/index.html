@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>采云台 · 管理端</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus@2.4.4/dist/index.css" />
+  <link rel="stylesheet" href="/shared/admin-staff.css" />
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- ==================== 登录页 ==================== -->
+  <div class="login-wrap" v-if="!user">
+    <div class="login-card">
+      <h1 class="login-title">采云台</h1>
+      <p class="login-sub">企业物资采购平台 · 采购与行政审批</p>
+      <el-form :model="loginForm" @submit.prevent>
+        <el-form-item>
+          <el-input v-model="loginForm.username" placeholder="请输入登录账号" size="large" clearable></el-input>
+        </el-form-item>
+        <el-form-item>
+          <el-input v-model="loginForm.password" type="password" placeholder="请输入密码"
+                    size="large" show-password @keyup.enter="doLogin"></el-input>
+        </el-form-item>
+        <el-button type="primary" size="large" style="width:100%" :loading="loginLoading" @click="doLogin">
+          登 录
+        </el-button>
+      </el-form>
+      <div class="login-tip">
+        演示账号：<b>admin / 123456</b>（行政管理员）<br />
+        <b>purchaser / 123456</b>（采购专员，可审批）<br />
+        普通员工账号无权登录管理端
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 主框架 ==================== -->
+  <div class="layout" v-else>
+    <aside class="sidebar">
+      <div class="logo">
+        <span class="logo-badge">采</span>
+        <span>采云台</span>
+      </div>
+      <nav class="menu">
+        <template v-for="g in menuGroups" :key="g.group">
+          <div class="menu-group">{{ g.group }}</div>
+          <div v-for="m in g.items" :key="m.key"
+               class="menu-item" :class="{ active: page === m.key }" @click="go(m.key)">
+            <span class="menu-icon">{{ m.icon }}</span>
+            <span>{{ m.label }}</span>
+          </div>
+        </template>
+      </nav>
+      <!-- 页面版本号：用于一眼判断浏览器里跑的是不是最新前端（本项目无构建工具，容易被缓存坑） -->
+      <div style="padding:10px 20px;font-size:11px;color:#64748b;border-top:1px solid rgba(255,255,255,.08)">
+        前端版本 v2026-09-29b
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-title">{{ currentMenuLabel }}</div>
+        <div class="topbar-right">
+          <span class="shop-switch" :class="{ closed: shopStatus !== 1 }" @click="toggleShop">
+            {{ shopStatus === 1 ? '采购开放' : '采购关闭' }}
+          </span>
+          <span class="role-chip">{{ roleLabel }}</span>
+          <span>{{ user.name }}</span>
+          <el-button link type="primary" @click="doLogout">退出</el-button>
+        </div>
+      </header>
+
+      <main class="content">
+
+        <!-- ==================== 工作台 ==================== -->
+        <template v-if="page === 'home'">
+          <div class="stat-row">
+            <div class="stat-card">
+              <div class="stat-label">今日采购额</div>
+              <div class="stat-num" style="color:var(--danger)">￥{{ biz.turnover || 0 }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">今日有效单量</div>
+              <div class="stat-num" style="color:var(--brand)">{{ biz.validOrderCount || 0 }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">订单完成率</div>
+              <div class="stat-num" style="color:var(--success)">
+                {{ ((biz.orderCompletionRate || 0) * 100).toFixed(1) }}%
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">今日新增员工</div>
+              <div class="stat-num" style="color:var(--purple)">{{ biz.newUsers || 0 }}</div>
+            </div>
+          </div>
+          <div class="stat-row">
+            <div class="stat-card">
+              <div class="stat-label">待审批</div>
+              <div class="stat-num" style="color:var(--warning)">{{ ov.waitingOrders || 0 }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">待发货</div>
+              <div class="stat-num" style="color:var(--brand)">{{ ov.deliveredOrders || 0 }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">在售物资 / 已停用</div>
+              <div class="stat-num">
+                <span style="color:var(--success)">{{ goodsOv.sold || 0 }}</span>
+                <span style="font-size:15px;color:var(--text-sub)"> / {{ goodsOv.discontinued || 0 }}</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">在售组合包 / 已停用</div>
+              <div class="stat-num">
+                <span style="color:var(--success)">{{ comboOv.sold || 0 }}</span>
+                <span style="font-size:15px;color:var(--text-sub)"> / {{ comboOv.discontinued || 0 }}</span>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- ==================== 物资分类 ==================== -->
+        <template v-if="page === 'category'">
+          <div class="page-card">
+            <div class="toolbar">
+              <el-select v-model="catQuery.type" placeholder="类型" clearable style="width:130px" @change="loadCategories(1)">
+                <el-option label="物资" :value="1"></el-option>
+                <el-option label="组合申领包" :value="2"></el-option>
+              </el-select>
+              <el-input v-model="catQuery.name" placeholder="分类名称" clearable style="width:180px" @keyup.enter="loadCategories(1)"></el-input>
+              <el-button type="primary" @click="loadCategories(1)">查询</el-button>
+              <div class="toolbar-spacer"></div>
+              <el-button type="primary" @click="openCategory()">新增分类</el-button>
+            </div>
+            <el-table :data="categories" border>
+              <el-table-column prop="name" label="分类名称" min-width="150"></el-table-column>
+              <el-table-column label="类型" width="130">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.type === 1 ? 'primary' : 'success'">
+                    {{ row.type === 1 ? '物资' : '组合申领包' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="sort" label="排序" width="80"></el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.status === 1 ? 'success' : 'info'">
+                    {{ row.status === 1 ? '已启用' : '已停用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="updateTime" label="更新时间" width="150"></el-table-column>
+              <el-table-column label="操作" width="200" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="openCategory(row)">编辑</el-button>
+                  <el-button link :type="row.status === 1 ? 'warning' : 'success'" size="small"
+                             @click="toggleCategory(row)">
+                    {{ row.status === 1 ? '停用' : '启用' }}
+                  </el-button>
+                  <el-button link type="danger" size="small" @click="deleteCategory(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="pager" v-if="catTotal > 0">
+              <el-pagination layout="total, prev, pager, next" :total="catTotal" :page-size="catPageSize"
+                             :current-page="catPage" @current-change="loadCategories"></el-pagination>
+            </div>
+          </div>
+
+          <el-dialog v-model="catDialog" :title="catForm.id ? '编辑分类' : '新增分类'" width="460px">
+            <el-form :model="catForm" label-width="90px">
+              <el-form-item label="分类名称">
+                <el-input v-model="catForm.name" placeholder="如：办公耗材"></el-input>
+              </el-form-item>
+              <el-form-item label="类型">
+                <el-radio-group v-model="catForm.type">
+                  <el-radio :value="1">物资</el-radio>
+                  <el-radio :value="2">组合申领包</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="排序">
+                <el-input-number v-model="catForm.sort" :min="0"></el-input-number>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="catDialog = false">取消</el-button>
+              <el-button type="primary" :loading="saving" @click="saveCategory">保存</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+        <!-- ==================== 物资管理 ==================== -->
+        <template v-if="page === 'goods'">
+          <div class="shop-layout">
+            <div class="cat-panel">
+              <div class="cat-title">物资分类</div>
+              <div class="cat-item" :class="{ active: goodsQuery.categoryId === null }"
+                   @click="pickGoodsCategory(null)">全部</div>
+              <div class="cat-item" v-for="c in goodsCategories" :key="c.id"
+                   :class="{ active: goodsQuery.categoryId === c.id }" @click="pickGoodsCategory(c.id)">
+                {{ c.name }}
+              </div>
+            </div>
+            <div style="flex:1;min-width:0">
+              <div class="page-card">
+                <div class="toolbar">
+                  <el-input v-model="goodsQuery.name" placeholder="物资名称" clearable style="width:180px"
+                            @keyup.enter="loadGoodsList(1)"></el-input>
+                  <el-select v-model="goodsQuery.status" placeholder="状态" clearable style="width:120px"
+                             @change="loadGoodsList(1)">
+                    <el-option label="已启用" :value="1"></el-option>
+                    <el-option label="已停用" :value="0"></el-option>
+                  </el-select>
+                  <el-button type="primary" @click="loadGoodsList(1)">查询</el-button>
+                  <div class="toolbar-spacer"></div>
+                  <el-button type="danger" plain :disabled="!goodsSelection.length" @click="deleteGoodsList">
+                    批量删除
+                  </el-button>
+                  <el-button type="primary" @click="openGoods()">新增物资</el-button>
+                </div>
+                <el-table :data="goodsList" border @selection-change="s => goodsSelection = s">
+                  <el-table-column type="selection" width="46"></el-table-column>
+                  <el-table-column prop="name" label="物资名称" min-width="140"></el-table-column>
+                  <el-table-column prop="spec" label="规格" width="130">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.spec" size="small" type="info">{{ row.spec }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="unit" label="单位" width="70"></el-table-column>
+                  <el-table-column prop="categoryName" label="分类" width="110"></el-table-column>
+                  <el-table-column label="单价" width="100">
+                    <template #default="{ row }"><span class="price">￥{{ row.price }}</span></template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="100">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="row.status === 1 ? 'success' : 'info'">
+                        {{ row.status === 1 ? '已启用' : '已停用' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="updateTime" label="更新时间" width="150"></el-table-column>
+                  <el-table-column label="操作" width="200" fixed="right">
+                    <template #default="{ row }">
+                      <el-button link type="primary" size="small" @click="openGoods(row)">编辑</el-button>
+                      <el-button link :type="row.status === 1 ? 'warning' : 'success'" size="small"
+                                 @click="toggleGoods(row)">
+                        {{ row.status === 1 ? '停用' : '启用' }}
+                      </el-button>
+                      <el-button link type="danger" size="small" @click="deleteGoods(row)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <div class="pager" v-if="goodsTotal > 0">
+                  <el-pagination layout="total, prev, pager, next" :total="goodsTotal" :page-size="10"
+                                 :current-page="goodsPage" @current-change="loadGoodsList"></el-pagination>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <el-dialog v-model="goodsDialog" :title="goodsForm.id ? '编辑物资' : '新增物资'" width="620px">
+            <el-form :model="goodsForm" label-width="90px">
+              <el-form-item label="物资名称">
+                <el-input v-model="goodsForm.name" placeholder="如：A4 复印纸"></el-input>
+              </el-form-item>
+              <el-form-item label="物资分类">
+                <el-select v-model="goodsForm.categoryId" placeholder="请选择分类" style="width:100%">
+                  <el-option v-for="c in goodsCategories" :key="c.id" :label="c.name" :value="c.id"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="单价">
+                <el-input-number v-model="goodsForm.price" :min="0" :precision="2" :step="1"></el-input-number>
+              </el-form-item>
+              <el-form-item label="规格型号">
+                <el-input v-model="goodsForm.spec" placeholder="如：A4/70g/500张"></el-input>
+              </el-form-item>
+              <el-form-item label="计量单位">
+                <el-input v-model="goodsForm.unit" placeholder="如：包 / 盒 / 支 / 台" style="width:200px"></el-input>
+              </el-form-item>
+              <el-form-item label="物资图片">
+                <el-upload :show-file-list="false" :before-upload="uploadImage" accept="image/*">
+                  <img v-if="goodsForm.image" :src="goodsForm.image"
+                       style="width:110px;height:110px;object-fit:cover;border-radius:6px;cursor:pointer" />
+                  <el-button v-else>上传图片</el-button>
+                </el-upload>
+              </el-form-item>
+              <el-form-item label="描述">
+                <el-input v-model="goodsForm.description" type="textarea" :rows="2"></el-input>
+              </el-form-item>
+              <el-form-item label="规格选项">
+                <div style="width:100%">
+                  <div class="login-tip" style="margin-bottom:8px">
+                    对应原「口味」结构，新场景语义为物资规格（颜色 / 型号 / 尺寸等）。
+                    提交时会作为该物资的可选规格一起保存。
+                  </div>
+                  <el-table :data="goodsForm.flavors" size="small" border>
+                    <el-table-column label="规格名" width="150">
+                      <template #default="{ row }">
+                        <el-input v-model="row.name" size="small" placeholder="如：颜色"></el-input>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="可选值（英文逗号分隔）">
+                      <template #default="{ row }">
+                        <el-input v-model="row.valueText" size="small" placeholder="如：黑色,白色"></el-input>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="" width="60">
+                      <template #default="{ $index }">
+                        <el-button link type="danger" size="small"
+                                   @click="goodsForm.flavors.splice($index, 1)">删</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                  <el-button size="small" style="margin-top:8px" @click="addFlavorRow">添加规格</el-button>
+                </div>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="goodsDialog = false">取消</el-button>
+              <el-button type="primary" :loading="saving" @click="saveGoods">保存</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+        <!-- ==================== 组合申领包 ==================== -->
+        <template v-if="page === 'combo'">
+          <div class="page-card">
+            <div class="toolbar">
+              <el-input v-model="comboQuery.name" placeholder="组合包名称" clearable style="width:180px"
+                        @keyup.enter="loadCombos(1)"></el-input>
+              <el-select v-model="comboQuery.categoryId" placeholder="分类" clearable style="width:170px"
+                         @change="loadCombos(1)">
+                <el-option v-for="c in comboCategories" :key="c.id" :label="c.name" :value="c.id"></el-option>
+              </el-select>
+              <el-select v-model="comboQuery.status" placeholder="状态" clearable style="width:120px"
+                         @change="loadCombos(1)">
+                <el-option label="已启用" :value="1"></el-option>
+                <el-option label="已停用" :value="0"></el-option>
+              </el-select>
+              <el-button type="primary" @click="loadCombos(1)">查询</el-button>
+              <div class="toolbar-spacer"></div>
+              <el-button type="danger" plain :disabled="!comboSelection.length" @click="deleteCombos">
+                批量删除
+              </el-button>
+              <el-button type="primary" @click="openCombo()">新增组合包</el-button>
+            </div>
+            <el-table :data="combos" border @selection-change="s => comboSelection = s">
+              <el-table-column type="selection" width="46"></el-table-column>
+              <el-table-column prop="name" label="组合包名称" min-width="150"></el-table-column>
+              <el-table-column prop="categoryName" label="分类" width="130"></el-table-column>
+              <el-table-column label="价格" width="110">
+                <template #default="{ row }"><span class="price">￥{{ row.price }}</span></template>
+              </el-table-column>
+              <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip></el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.status === 1 ? 'success' : 'info'">
+                    {{ row.status === 1 ? '已启用' : '已停用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="updateTime" label="更新时间" width="150"></el-table-column>
+              <el-table-column label="操作" width="200" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="openCombo(row)">编辑</el-button>
+                  <el-button link :type="row.status === 1 ? 'warning' : 'success'" size="small"
+                             @click="toggleCombo(row)">
+                    {{ row.status === 1 ? '停用' : '启用' }}
+                  </el-button>
+                  <el-button link type="danger" size="small" @click="deleteCombo(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="pager" v-if="comboTotal > 0">
+              <el-pagination layout="total, prev, pager, next" :total="comboTotal" :page-size="10"
+                             :current-page="comboPage" @current-change="loadCombos"></el-pagination>
+            </div>
+          </div>
+
+          <el-dialog v-model="comboDialog" :title="comboForm.id ? '编辑组合包' : '新增组合包'" width="640px">
+            <el-form :model="comboForm" label-width="90px">
+              <el-form-item label="名称">
+                <el-input v-model="comboForm.name" placeholder="如：新员工入职办公包"></el-input>
+              </el-form-item>
+              <el-form-item label="分类">
+                <el-select v-model="comboForm.categoryId" placeholder="请选择分类" style="width:100%">
+                  <el-option v-for="c in comboCategories" :key="c.id" :label="c.name" :value="c.id"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="价格">
+                <el-input-number v-model="comboForm.price" :min="0" :precision="2" :step="1"></el-input-number>
+              </el-form-item>
+              <el-form-item label="说明">
+                <el-input v-model="comboForm.description" type="textarea" :rows="2"></el-input>
+              </el-form-item>
+              <el-form-item label="包含物资">
+                <div style="width:100%">
+                  <el-table :data="comboForm.comboItems" size="small" border>
+                    <el-table-column label="物资" min-width="160">
+                      <template #default="{ row }">
+                        <el-select v-model="row.goodsId" placeholder="选择物资" filterable size="small"
+                                   style="width:100%" @change="onPickGoods(row)">
+                          <el-option v-for="d in allGoodsList" :key="d.id" :label="d.name + '（￥' + d.price + '）'"
+                                     :value="d.id"></el-option>
+                        </el-select>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="数量" width="110">
+                      <template #default="{ row }">
+                        <el-input-number v-model="row.copies" :min="1" size="small" style="width:100%"></el-input-number>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="" width="60">
+                      <template #default="{ $index }">
+                        <el-button link type="danger" size="small"
+                                   @click="comboForm.comboItems.splice($index, 1)">删</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                  <el-button size="small" style="margin-top:8px" @click="addComboGoods">添加物资</el-button>
+                </div>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="comboDialog = false">取消</el-button>
+              <el-button type="primary" :loading="saving" @click="saveCombo">保存</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+        <!-- ==================== 申领单管理 ==================== -->
+        <template v-if="page === 'order'">
+          <div class="stat-row col3">
+            <div class="stat-card">
+              <div class="stat-label">待审批</div>
+              <div class="stat-num" style="color:var(--warning)">{{ orderStat.toBeConfirmed || 0 }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">待发货</div>
+              <div class="stat-num" style="color:var(--brand)">{{ orderStat.confirmed || 0 }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">配送中</div>
+              <div class="stat-num" style="color:var(--purple)">{{ orderStat.deliveryInProgress || 0 }}</div>
+            </div>
+          </div>
+          <div class="page-card">
+            <div class="toolbar">
+              <el-input v-model="orderQuery.number" placeholder="申领单号" clearable style="width:160px"
+                        @keyup.enter="loadOrders(1)"></el-input>
+              <el-input v-model="orderQuery.phone" placeholder="联系电话" clearable style="width:150px"
+                        @keyup.enter="loadOrders(1)"></el-input>
+              <el-select v-model="orderQuery.status" placeholder="状态" clearable style="width:130px"
+                         @change="loadOrders(1)">
+                <el-option label="待提交" :value="1"></el-option>
+                <el-option label="待审批" :value="2"></el-option>
+                <el-option label="采购中" :value="3"></el-option>
+                <el-option label="配送中" :value="4"></el-option>
+                <el-option label="已完成" :value="5"></el-option>
+                <el-option label="已取消" :value="6"></el-option>
+              </el-select>
+              <el-date-picker v-model="orderDateRange" type="daterange" value-format="YYYY-MM-DD"
+                              start-placeholder="开始日期" end-placeholder="结束日期" style="width:250px"></el-date-picker>
+              <el-button type="primary" @click="loadOrders(1)">查询</el-button>
+            </div>
+            <el-table :data="orders" border>
+              <el-table-column prop="number" label="申领单号" width="150"></el-table-column>
+              <el-table-column label="物资" min-width="180">
+                <template #default="{ row }">
+                  <div class="order-goods">{{ row.orderGoods || '—' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="consignee" label="申领人" width="100"></el-table-column>
+              <el-table-column label="金额" width="100">
+                <template #default="{ row }"><span class="price">￥{{ row.amount }}</span></template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="orderStatusTag(row.status)">{{ orderStatusText(row.status) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="orderTime" label="提交时间" width="150"></el-table-column>
+              <el-table-column label="操作" width="250" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="viewOrder(row)">详情</el-button>
+                  <el-button link type="success" size="small" v-if="row.status === 2"
+                             @click="approveOrder(row)">审批通过</el-button>
+                  <el-button link type="danger" size="small" v-if="row.status === 2"
+                             @click="openReject(row)">驳回</el-button>
+                  <el-button link type="primary" size="small" v-if="row.status === 3"
+                             @click="deliverOrder(row)">发货</el-button>
+                  <el-button link type="success" size="small" v-if="row.status === 4"
+                             @click="completeOrder(row)">核销完成</el-button>
+                  <el-button link type="warning" size="small"
+                             v-if="row.status === 2 || row.status === 3"
+                             @click="openCancel(row)">取消</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="pager" v-if="orderTotal > 0">
+              <el-pagination layout="total, prev, pager, next" :total="orderTotal" :page-size="10"
+                             :current-page="orderPage" @current-change="loadOrders"></el-pagination>
+            </div>
+          </div>
+
+          <el-drawer v-model="orderDrawer" title="申领单详情" size="500px">
+            <div v-if="currentOrder">
+              <div class="detail-row">
+                <div class="detail-label">申领单号</div>
+                <div class="detail-value">{{ currentOrder.number }}</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">状态</div>
+                <div class="detail-value">
+                  <el-tag size="small" :type="orderStatusTag(currentOrder.status)">
+                    {{ orderStatusText(currentOrder.status) }}
+                  </el-tag>
+                </div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">申领人</div>
+                <div class="detail-value">{{ currentOrder.consignee }}（{{ currentOrder.phone }}）</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">收货位置</div>
+                <div class="detail-value">{{ currentOrder.address }}</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">金额</div>
+                <div class="detail-value price">￥{{ currentOrder.amount }}</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">提交时间</div>
+                <div class="detail-value">{{ currentOrder.orderTime }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.approveTime">
+                <div class="detail-label">审批时间</div>
+                <div class="detail-value">{{ currentOrder.approveTime }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.remindTime">
+                <div class="detail-label">催办时间</div>
+                <div class="detail-value" style="color:var(--warning)">{{ currentOrder.remindTime }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.remark">
+                <div class="detail-label">申领备注</div>
+                <div class="detail-value">{{ currentOrder.remark }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.rejectionReason">
+                <div class="detail-label">驳回理由</div>
+                <div class="detail-value" style="color:var(--danger)">{{ currentOrder.rejectionReason }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.cancelReason">
+                <div class="detail-label">取消原因</div>
+                <div class="detail-value">{{ currentOrder.cancelReason }}</div>
+              </div>
+              <div style="margin-top:16px">
+                <b style="font-size:13px">申领明细</b>
+                <el-table :data="currentOrder.orderDetailList || []" size="small" border style="margin-top:8px">
+                  <el-table-column prop="name" label="物资"></el-table-column>
+                  <el-table-column prop="number" label="数量" width="70"></el-table-column>
+                  <el-table-column prop="amount" label="单价" width="90"></el-table-column>
+                </el-table>
+              </div>
+            </div>
+          </el-drawer>
+
+          <el-dialog v-model="rejectDialog" title="驳回申领单" width="460px">
+            <el-form label-width="80px">
+              <el-form-item label="驳回理由">
+                <el-select v-model="rejectForm.rejectionReason" placeholder="请选择或输入" allow-create filterable
+                           style="width:100%">
+                  <el-option label="当前申领量较大，暂时无法审批" value="当前申领量较大，暂时无法审批"></el-option>
+                  <el-option label="物资库存不足，暂时无法审批" value="物资库存不足，暂时无法审批"></el-option>
+                  <el-option label="超出部门预算额度" value="超出部门预算额度"></el-option>
+                  <el-option label="申领人电话取消" value="申领人电话取消"></el-option>
+                </el-select>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="rejectDialog = false">取消</el-button>
+              <el-button type="danger" @click="doReject">确认驳回</el-button>
+            </template>
+          </el-dialog>
+
+          <el-dialog v-model="cancelDialog" title="取消申领单" width="460px">
+            <el-form label-width="80px">
+              <el-form-item label="取消原因">
+                <el-input v-model="cancelForm.cancelReason" placeholder="请输入取消原因"></el-input>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="cancelDialog = false">取消</el-button>
+              <el-button type="warning" @click="doCancel">确认取消</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+        <!-- ==================== 员工管理 ==================== -->
+        <template v-if="page === 'employee'">
+          <div class="page-card">
+            <div class="toolbar">
+              <el-input v-model="empQuery.name" placeholder="员工姓名" clearable style="width:170px"
+                        @keyup.enter="loadEmployees(1)"></el-input>
+              <el-select v-model="empQuery.role" placeholder="角色" clearable style="width:140px"
+                         @change="loadEmployees(1)">
+                <el-option label="普通员工" value="EMPLOYEE"></el-option>
+                <el-option label="采购专员" value="PURCHASER"></el-option>
+                <el-option label="行政管理员" value="ADMIN"></el-option>
+              </el-select>
+              <el-select v-model="empQuery.deptId" placeholder="部门" clearable style="width:150px"
+                         @change="loadEmployees(1)">
+                <el-option v-for="d in departments" :key="d.id" :label="d.name" :value="d.id"></el-option>
+              </el-select>
+              <el-button type="primary" @click="loadEmployees(1)">查询</el-button>
+              <div class="toolbar-spacer"></div>
+              <el-button type="primary" @click="openEmployee()">新增员工</el-button>
+            </div>
+            <el-table :data="employees" border>
+              <el-table-column prop="name" label="姓名" width="110"></el-table-column>
+              <el-table-column prop="username" label="登录账号" width="130"></el-table-column>
+              <el-table-column prop="phone" label="电话" width="130"></el-table-column>
+              <el-table-column label="角色" width="120">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="roleTag(row.role)">{{ roleText(row.role) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="部门" width="120">
+                <template #default="{ row }">{{ deptName(row.deptId) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.status === 1 ? 'success' : 'danger'">
+                    {{ row.status === 1 ? '正常' : '已锁定' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="updateTime" label="更新时间" width="150"></el-table-column>
+              <el-table-column label="操作" width="190" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="openEmployee(row)">编辑</el-button>
+                  <el-button link :type="row.status === 1 ? 'danger' : 'success'" size="small"
+                             @click="toggleEmployee(row)">
+                    {{ row.status === 1 ? '锁定' : '启用' }}
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="pager" v-if="empTotal > 0">
+              <el-pagination layout="total, prev, pager, next" :total="empTotal" :page-size="10"
+                             :current-page="empPage" @current-change="loadEmployees"></el-pagination>
+            </div>
+          </div>
+
+          <el-dialog v-model="empDialog" :title="empForm.id ? '编辑员工' : '新增员工'" width="500px">
+            <el-form :model="empForm" label-width="90px">
+              <el-form-item label="姓名">
+                <el-input v-model="empForm.name"></el-input>
+              </el-form-item>
+              <el-form-item label="登录账号">
+                <el-input v-model="empForm.username" :disabled="!!empForm.id"
+                          placeholder="新增后即为员工端登录账号"></el-input>
+              </el-form-item>
+              <el-form-item label="手机号">
+                <el-input v-model="empForm.phone"></el-input>
+              </el-form-item>
+              <el-form-item label="性别">
+                <el-radio-group v-model="empForm.sex">
+                  <el-radio value="1">男</el-radio>
+                  <el-radio value="0">女</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="身份证号">
+                <el-input v-model="empForm.idNumber"></el-input>
+              </el-form-item>
+              <el-form-item label="角色">
+                <el-select v-model="empForm.role" style="width:100%">
+                  <el-option label="普通员工（仅员工端）" value="EMPLOYEE"></el-option>
+                  <el-option label="采购专员（可审批发货）" value="PURCHASER"></el-option>
+                  <el-option label="行政管理员（全部权限）" value="ADMIN"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="所属部门">
+                <el-select v-model="empForm.deptId" placeholder="员工端申领时按部门扣预算" clearable
+                           style="width:100%">
+                  <el-option v-for="d in departments" :key="d.id" :label="d.name" :value="d.id"></el-option>
+                </el-select>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="empDialog = false">取消</el-button>
+              <el-button type="primary" :loading="saving" @click="saveEmployee">保存</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+        <!-- ==================== 部门管理 ==================== -->
+        <template v-if="page === 'department'">
+          <div class="page-card">
+            <div class="toolbar">
+              <el-input v-model="deptQuery.name" placeholder="部门名称" clearable style="width:180px"
+                        @keyup.enter="loadDepartments"></el-input>
+              <el-button type="primary" @click="loadDepartments">查询</el-button>
+              <div class="toolbar-spacer"></div>
+              <el-button type="primary" @click="openDepartment()">新增部门</el-button>
+            </div>
+            <el-table :data="departmentList" border>
+              <el-table-column prop="name" label="部门名称" min-width="140"></el-table-column>
+              <el-table-column prop="code" label="部门编码" width="140"></el-table-column>
+              <el-table-column label="负责人" width="120">
+                <template #default="{ row }">{{ row.leaderName || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="sort" label="排序" width="80"></el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.status === 1 ? 'success' : 'info'">
+                    {{ row.status === 1 ? '已启用' : '已停用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="createTime" label="创建时间" width="150"></el-table-column>
+              <el-table-column label="操作" width="150" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="openDepartment(row)">编辑</el-button>
+                  <el-button link type="danger" size="small" @click="deleteDepartment(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <el-dialog v-model="deptDialog" :title="deptForm.id ? '编辑部门' : '新增部门'" width="480px">
+            <el-form :model="deptForm" label-width="90px">
+              <el-form-item label="部门名称">
+                <el-input v-model="deptForm.name" placeholder="如：技术部"></el-input>
+              </el-form-item>
+              <el-form-item label="部门编码">
+                <el-input v-model="deptForm.code" placeholder="如：DEPT_TECH" :disabled="!!deptForm.id"></el-input>
+              </el-form-item>
+              <el-form-item label="负责人">
+                <el-select v-model="deptForm.leaderId" placeholder="可选" clearable filterable style="width:100%">
+                  <el-option v-for="e in employees" :key="e.id" :label="e.name" :value="e.id"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="排序">
+                <el-input-number v-model="deptForm.sort" :min="0"></el-input-number>
+              </el-form-item>
+              <el-form-item label="状态">
+                <el-radio-group v-model="deptForm.status">
+                  <el-radio :value="1">启用</el-radio>
+                  <el-radio :value="0">停用</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="deptDialog = false">取消</el-button>
+              <el-button type="primary" :loading="saving" @click="saveDepartment">保存</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+        <!-- ==================== 部门预算 ==================== -->
+        <template v-if="page === 'budget'">
+          <div class="page-card">
+            <div class="toolbar">
+              <el-select v-model="budgetQuery.deptId" placeholder="部门" clearable style="width:160px"
+                         @change="loadBudgets">
+                <el-option v-for="d in departments" :key="d.id" :label="d.name" :value="d.id"></el-option>
+              </el-select>
+              <el-date-picker v-model="budgetQuery.period" type="month" value-format="YYYY-MM"
+                              placeholder="预算周期" style="width:150px" @change="loadBudgets"></el-date-picker>
+              <el-button type="primary" @click="loadBudgets">查询</el-button>
+              <div class="toolbar-spacer"></div>
+              <el-button type="primary" @click="openBudget()">设置预算</el-button>
+            </div>
+            <el-table :data="budgetList" border>
+              <el-table-column prop="deptName" label="部门" width="140"></el-table-column>
+              <el-table-column prop="period" label="预算周期" width="120"></el-table-column>
+              <el-table-column label="预算总额" width="130">
+                <template #default="{ row }">￥{{ row.totalAmount }}</template>
+              </el-table-column>
+              <el-table-column label="已使用" width="130">
+                <template #default="{ row }">
+                  <span style="color:var(--warning)">￥{{ row.usedAmount }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="可用余额" width="130">
+                <template #default="{ row }">
+                  <span class="price">￥{{ row.remainAmount }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="使用率" min-width="200">
+                <template #default="{ row }">
+                  <el-progress :percentage="usedPercent(row)"
+                               :status="usedPercent(row) > 90 ? 'exception' : undefined"></el-progress>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="openBudget(row)">调整</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="empty" v-if="!budgetList.length">
+              还没有预算记录。员工提交申领单时会按「部门 + 当月」校验并预扣额度，请先为各部门设置预算。
+            </div>
+          </div>
+
+          <el-dialog v-model="budgetDialog" title="设置部门预算" width="480px">
+            <el-form :model="budgetForm" label-width="90px">
+              <el-form-item label="部门">
+                <el-select v-model="budgetForm.deptId" style="width:100%" :disabled="!!budgetForm.id">
+                  <el-option v-for="d in departments" :key="d.id" :label="d.name" :value="d.id"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="预算周期">
+                <el-date-picker v-model="budgetForm.period" type="month" value-format="YYYY-MM"
+                                placeholder="选择月份" style="width:100%" :disabled="!!budgetForm.id"></el-date-picker>
+              </el-form-item>
+              <el-form-item label="预算总额">
+                <el-input-number v-model="budgetForm.totalAmount" :min="0" :precision="2" :step="1000"
+                                 style="width:100%"></el-input-number>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="budgetDialog = false">取消</el-button>
+              <el-button type="primary" :loading="saving" @click="saveBudget">保存</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+      </main>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/vue@3.4.15/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/element-plus@2.4.4/dist/index.full.min.js"></script>
+<script src="https://unpkg.com/element-plus@2.4.4/dist/locale/zh-cn.min.js"></script>
+<script src="console.js?v=20260929b"></script>
+</body>
+</html>

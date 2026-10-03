@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.caiyuntai.mapper.BudgetMapper">
+
+    <insert id="insert" parameterType="Budget" useGeneratedKeys="true" keyProperty="id">
+        insert into budget (dept_id, period, total_amount, used_amount, status,
+                            create_time, update_time, create_user, update_user)
+        values (#{deptId}, #{period}, #{totalAmount}, #{usedAmount}, #{status},
+                #{createTime}, #{updateTime}, #{createUser}, #{updateUser})
+    </insert>
+
+    <update id="update" parameterType="Budget">
+        update budget
+        <set>
+            <if test="deptId != null">dept_id = #{deptId},</if>
+            <if test="period != null">period = #{period},</if>
+            <if test="totalAmount != null">total_amount = #{totalAmount},</if>
+            <if test="usedAmount != null">used_amount = #{usedAmount},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+            <if test="updateUser != null">update_user = #{updateUser},</if>
+        </set>
+        where id = #{id}
+    </update>
+
+    <!--
+      预扣预算：把额度判断写进 where，靠行锁保证并发安全。
+      total_amount - used_amount >= amount 不成立时影响行数为 0，业务层据此抛"余额不足"。
+    -->
+    <update id="deduct">
+        update budget
+        set used_amount = used_amount + #{amount}
+        where dept_id = #{deptId}
+          and period = #{period}
+          and status = 1
+          and total_amount - used_amount &gt;= #{amount}
+    </update>
+
+    <!--
+      返还预算：带 used_amount >= amount 条件，避免重复返还把余额刷成负数或虚增。
+    -->
+    <update id="release">
+        update budget
+        set used_amount = used_amount - #{amount}
+        where dept_id = #{deptId}
+          and period = #{period}
+          and used_amount &gt;= #{amount}
+    </update>
+
+    <select id="list" parameterType="Budget" resultType="com.caiyuntai.vo.BudgetVO">
+        select b.id,
+               b.dept_id,
+               d.name as deptName,
+               b.period,
+               b.total_amount,
+               b.used_amount,
+               (b.total_amount - b.used_amount) as remainAmount
+        from budget b
+                 left join department d on b.dept_id = d.id
+        <where>
+            <if test="deptId != null">
+                and b.dept_id = #{deptId}
+            </if>
+            <if test="period != null and period != ''">
+                and b.period = #{period}
+            </if>
+            <if test="status != null">
+                and b.status = #{status}
+            </if>
+        </where>
+        order by b.period desc, b.dept_id asc
+    </select>
+
+</mapper>

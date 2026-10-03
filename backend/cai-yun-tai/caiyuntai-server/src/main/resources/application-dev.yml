@@ -1,0 +1,21 @@
+sky:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    host: localhost
+    port: 3306
+    database: sky_take_out
+    username: root
+    # 注意：原项目模板里这里是 root，与本机 MySQL 实际密码不一致，已按本机实际值修正
+    password: 123456
+  alioss:
+    endpoint: oss-cn-beijing.aliyuncs.com
+    access-key-id: your-access-key-id
+    access-key-secret: your-access-key-secret
+    bucket-name: your-bucket-name
+  redis:
+    host: localhost
+    port: 6379
+    password: 123456
+    database: 10
+# 说明：原 sky.wechat（微信登录/支付）与 sky.shop、sky.baidu（百度地图配送范围校验）
+# 均已随业务场景切换移除，此处不再需要相关配置。

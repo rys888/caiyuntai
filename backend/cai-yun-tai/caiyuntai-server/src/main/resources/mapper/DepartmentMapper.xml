@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.caiyuntai.mapper.DepartmentMapper">
+
+    <insert id="insert" parameterType="Department" useGeneratedKeys="true" keyProperty="id">
+        insert into department (parent_id, name, code, leader_id, sort, status,
+                                create_time, update_time, create_user, update_user)
+        values (#{parentId}, #{name}, #{code}, #{leaderId}, #{sort}, #{status},
+                #{createTime}, #{updateTime}, #{createUser}, #{updateUser})
+    </insert>
+
+    <update id="update" parameterType="Department">
+        update department
+        <set>
+            <if test="parentId != null">parent_id = #{parentId},</if>
+            <if test="name != null">name = #{name},</if>
+            <if test="code != null">code = #{code},</if>
+            <if test="leaderId != null">leader_id = #{leaderId},</if>
+            <if test="sort != null">sort = #{sort},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+            <if test="updateUser != null">update_user = #{updateUser},</if>
+        </set>
+        where id = #{id}
+    </update>
+
+    <!-- 部门列表，左连员工表带出负责人姓名 -->
+    <select id="list" parameterType="Department" resultType="com.caiyuntai.vo.DepartmentVO">
+        select d.id,
+               d.parent_id,
+               d.name,
+               d.code,
+               d.leader_id,
+               e.name as leaderName,
+               d.sort,
+               d.status,
+               d.create_time,
+               d.update_time
+        from department d
+                 left join employee e on d.leader_id = e.id
+        <where>
+            <if test="name != null and name != ''">
+                and d.name like concat('%', #{name}, '%')
+            </if>
+            <if test="status != null">
+                and d.status = #{status}
+            </if>
+        </where>
+        order by d.sort asc, d.id asc
+    </select>
+
+</mapper>

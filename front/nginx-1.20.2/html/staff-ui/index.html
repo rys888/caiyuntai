@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>采云台 · 员工端</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus@2.4.4/dist/index.css" />
+  <link rel="stylesheet" href="/shared/admin-staff.css" />
+  <!-- 员工端特有样式（其余全部来自共用样式表） -->
+  <style>
+    .cart-float {
+      position: fixed; right: 28px; bottom: 28px; z-index: 10;
+      background: var(--brand); color: #fff; border-radius: 26px;
+      padding: 12px 20px; box-shadow: 0 8px 20px rgba(43, 108, 176, .4);
+      cursor: pointer; font-size: 14px; display: flex; align-items: center; gap: 8px;
+    }
+    .cart-float:hover { background: var(--brand-dark); }
+
+    .budget-chip {
+      background: var(--brand-light); color: var(--brand-dark);
+      padding: 5px 12px; border-radius: 14px; font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- ==================== 登录页 ==================== -->
+  <div class="login-wrap" v-if="!user">
+    <div class="login-card">
+      <h1 class="login-title">采云台</h1>
+      <p class="login-sub">企业物资采购平台 · 办公物资申领</p>
+      <el-form :model="loginForm" @submit.prevent>
+        <el-form-item>
+          <el-input v-model="loginForm.username" placeholder="请输入登录账号" size="large" clearable></el-input>
+        </el-form-item>
+        <el-form-item>
+          <el-input v-model="loginForm.password" type="password" placeholder="请输入密码"
+                    size="large" show-password @keyup.enter="doLogin"></el-input>
+        </el-form-item>
+        <el-button type="primary" size="large" style="width:100%" :loading="loginLoading" @click="doLogin">
+          登 录
+        </el-button>
+      </el-form>
+      <div class="login-tip">
+        演示账号：<b>zhangsan / 123456</b>（普通员工）<br />
+        账号由行政管理员在管理端创建
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 主框架 ==================== -->
+  <div class="layout" v-else>
+    <aside class="sidebar">
+      <div class="logo">
+        <span class="logo-badge">采</span>
+        <span>采云台</span>
+      </div>
+      <nav class="menu">
+        <div v-for="m in menus" :key="m.key"
+             class="menu-item" :class="{ active: page === m.key }" @click="go(m.key)">
+          <span class="menu-icon">{{ m.icon }}</span>
+          <span>{{ m.label }}</span>
+        </div>
+      </nav>
+      <!-- 页面版本号：用于一眼判断浏览器里跑的是不是最新前端（本项目无构建工具，容易被缓存坑） -->
+      <div style="padding:10px 20px;font-size:11px;color:#64748b;border-top:1px solid rgba(255,255,255,.08)">
+        前端版本 v2026-09-29b
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-title">{{ currentMenuLabel }}</div>
+        <div class="topbar-right">
+          <span class="budget-chip" v-if="budget">
+            本月额度：￥{{ budget.remainAmount }} / ￥{{ budget.totalAmount }}
+          </span>
+          <span>{{ user.name }}（{{ user.deptName || '未分配部门' }}）</span>
+          <el-button link type="primary" @click="doLogout">退出</el-button>
+        </div>
+      </header>
+
+      <main class="content">
+
+        <!-- ---------- 首页 ---------- -->
+        <template v-if="page === 'home'">
+          <div class="stat-row">
+            <div class="stat-card">
+              <div class="stat-label">待审批</div>
+              <div class="stat-num" style="color:var(--warning)">{{ stat.waiting }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">采购中</div>
+              <div class="stat-num" style="color:var(--brand)">{{ stat.purchasing }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">配送中</div>
+              <div class="stat-num" style="color:#7c3aed">{{ stat.delivering }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">已完成</div>
+              <div class="stat-num" style="color:var(--success)">{{ stat.finished }}</div>
+            </div>
+          </div>
+          <div class="page-card">
+            <div class="toolbar">
+              <b>常用物资</b>
+              <div class="toolbar-spacer"></div>
+              <el-button link type="primary" @click="go('goods')">去物资目录 →</el-button>
+            </div>
+            <div class="goods-grid" v-if="hotGoods.length">
+              <div class="goods-card" v-for="g in hotGoods" :key="g.id">
+                <div class="goods-img">
+                  <img v-if="g.image" :src="g.image" :alt="g.name" />
+                  <span v-else>暂无图片</span>
+                </div>
+                <div class="goods-body">
+                  <div class="goods-name">{{ g.name }}</div>
+                  <div class="goods-desc">
+                    <span class="spec-tag" v-if="g.spec">{{ g.spec }}</span>{{ g.description }}
+                  </div>
+                  <div class="goods-foot">
+                    <span class="price"><small>￥</small>{{ g.price }}</span>
+                    <el-button type="primary" size="small" @click="addCart(g, null)">加入申领车</el-button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="empty" v-else>暂无可申领物资，请先在管理端维护物资目录</div>
+          </div>
+        </template>
+
+        <!-- ---------- 物资目录 ---------- -->
+        <template v-if="page === 'goods'">
+          <div class="shop-layout">
+            <div class="cat-panel">
+              <div class="cat-title">物资分类</div>
+              <div class="cat-item" :class="{ active: activeCategory === null }"
+                   @click="selectCategory(null)">全部物资</div>
+              <div class="cat-item" v-for="c in categories" :key="c.id"
+                   :class="{ active: activeCategory === c.id }" @click="selectCategory(c.id)">
+                {{ c.name }}
+              </div>
+            </div>
+
+            <div class="goods-panel">
+              <div class="page-card">
+                <div class="toolbar">
+                  <el-input v-model="goodsKeyword" placeholder="搜索物资名称" clearable
+                            style="width:240px" @keyup.enter="loadGoods" @clear="loadGoods"></el-input>
+                  <el-button type="primary" @click="loadGoods">搜索</el-button>
+                  <div class="toolbar-spacer"></div>
+                  <span style="font-size:13px;color:var(--text-sub)">共 {{ goods.length }} 项</span>
+                </div>
+                <div class="goods-grid" v-if="goods.length">
+                  <div class="goods-card" v-for="g in goods" :key="g.id">
+                    <div class="goods-img">
+                      <img v-if="g.image" :src="g.image" :alt="g.name" />
+                      <span v-else>暂无图片</span>
+                    </div>
+                    <div class="goods-body">
+                      <div class="goods-name">{{ g.name }}</div>
+                      <div class="goods-desc">
+                        <span class="spec-tag" v-if="g.spec">{{ g.spec }}</span>{{ g.description || '—' }}
+                      </div>
+                      <div class="goods-foot">
+                        <span class="price"><small>￥</small>{{ g.price }}</span>
+                        <el-button type="primary" size="small" @click="addCart(g, null)">加入</el-button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="empty" v-else>没有找到物资</div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- ---------- 组合申领包 ---------- -->
+        <template v-if="page === 'packages'">
+          <div class="page-card">
+            <div class="toolbar">
+              <b>组合申领包</b>
+              <span style="font-size:12px;color:var(--text-sub)">
+                按场景打包的常用物资组合，一次申领即可
+              </span>
+            </div>
+            <div class="goods-grid" v-if="packages.length">
+              <div class="goods-card" v-for="p in packages" :key="p.id">
+                <div class="goods-img">
+                  <img v-if="p.image" :src="p.image" :alt="p.name" />
+                  <span v-else>组合包</span>
+                </div>
+                <div class="goods-body">
+                  <div class="goods-name">{{ p.name }}</div>
+                  <div class="goods-desc">{{ p.description || '—' }}</div>
+                  <div class="goods-foot">
+                    <span class="price"><small>￥</small>{{ p.price }}</span>
+                    <div>
+                      <el-button size="small" @click="viewPackage(p)">明细</el-button>
+                      <el-button type="primary" size="small" @click="addCart(null, p)">加入</el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="empty" v-else>暂无组合申领包</div>
+          </div>
+
+          <el-dialog v-model="pkgDialog" title="组合申领包明细" width="560px">
+            <div v-if="pkgInfo">
+              <div class="detail-row">
+                <div class="detail-label">名称</div>
+                <div class="detail-value">{{ pkgInfo.name }}</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">价格</div>
+                <div class="detail-value" style="color:var(--danger)">￥{{ pkgInfo.price }}</div>
+              </div>
+              <div class="detail-row" style="border-bottom:none">
+                <div class="detail-label">包含物资</div>
+                <div class="detail-value">
+                  <el-table :data="pkgGoods" size="small" border>
+                    <el-table-column prop="name" label="物资名称"></el-table-column>
+                    <el-table-column prop="copies" label="数量" width="80"></el-table-column>
+                    <el-table-column prop="description" label="说明"></el-table-column>
+                  </el-table>
+                </div>
+              </div>
+            </div>
+          </el-dialog>
+        </template>
+
+        <!-- ---------- 申领车 ---------- -->
+        <template v-if="page === 'cart'">
+          <div class="page-card">
+            <div class="toolbar">
+              <b>申领车</b>
+              <div class="toolbar-spacer"></div>
+              <el-button v-if="cart.length" type="danger" link @click="cleanCart">清空</el-button>
+            </div>
+
+            <el-table :data="cart" border v-if="cart.length">
+              <el-table-column prop="name" label="物资名称" min-width="180"></el-table-column>
+              <el-table-column prop="amount" label="单价" width="110">
+                <template #default="{ row }">￥{{ row.amount }}</template>
+              </el-table-column>
+              <el-table-column label="数量" width="150">
+                <template #default="{ row }">
+                  <el-button size="small" circle @click="subCart(row)">−</el-button>
+                  <span style="display:inline-block;width:44px;text-align:center">{{ row.number }}</span>
+                  <el-button size="small" circle @click="addCartByRow(row)">+</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column label="小计" width="120">
+                <template #default="{ row }">
+                  <span style="color:var(--danger)">￥{{ (row.amount * row.number).toFixed(2) }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="empty" v-else>
+              申领车是空的，先去物资目录挑几样（提交按钮只在申领车有物资时出现）
+              <div style="margin-top:12px">
+                <el-button type="primary" @click="go('goods')">去物资目录</el-button>
+              </div>
+            </div>
+
+            <div v-if="cart.length" style="margin-top:20px">
+              <div class="toolbar">
+                <span style="font-size:13px">收货地址：</span>
+                <el-select v-model="submitForm.addressBookId" placeholder="请选择收货地址" style="width:320px">
+                  <el-option v-for="a in addresses" :key="a.id"
+                             :label="aLabel(a)" :value="a.id"></el-option>
+                </el-select>
+                <el-button link type="primary" @click="go('address')">管理地址</el-button>
+                <span v-if="!submitForm.addressBookId" style="font-size:12px;color:var(--danger)">
+                  还没有选择收货地址，提交前请先选择或新增一个
+                </span>
+                <div class="toolbar-spacer"></div>
+                <span>合计：<b class="price">￥{{ totalAmount }}</b></span>
+              </div>
+              <div class="toolbar">
+                <el-input v-model="submitForm.remark" placeholder="备注（可选）" style="width:420px"></el-input>
+                <el-button type="primary" size="large" :loading="submitting" @click="submitOrder">
+                  提交申领单
+                </el-button>
+              </div>
+              <div class="login-tip" style="max-width:640px">
+                提交后系统会立即预扣本部门预算，申领单进入「待审批」，由采购专员审批。
+                审批驳回或你主动撤销时，预算会自动返还。
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- ---------- 我的申领单 ---------- -->
+        <template v-if="page === 'orders'">
+          <div class="page-card">
+            <div class="toolbar">
+              <el-radio-group v-model="orderStatus" @change="loadOrders(1)">
+                <el-radio-button :value="null">全部</el-radio-button>
+                <el-radio-button :value="2">待审批</el-radio-button>
+                <el-radio-button :value="3">采购中</el-radio-button>
+                <el-radio-button :value="4">配送中</el-radio-button>
+                <el-radio-button :value="5">已完成</el-radio-button>
+                <el-radio-button :value="6">已取消</el-radio-button>
+              </el-radio-group>
+              <div class="toolbar-spacer"></div>
+              <el-button link type="primary" @click="loadOrders(orderPage)">刷新</el-button>
+            </div>
+
+            <el-table :data="orders" border v-if="orders.length">
+              <el-table-column prop="number" label="申领单号" width="150"></el-table-column>
+              <el-table-column label="物资" min-width="200">
+                <template #default="{ row }">
+                  <div class="order-goods">{{ orderGoodsText(row) }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="金额" width="100">
+                <template #default="{ row }">￥{{ row.amount }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="statusTagType(row.status)" size="small">{{ statusText(row.status) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="orderTime" label="提交时间" width="150"></el-table-column>
+              <el-table-column label="操作" width="260" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="viewOrder(row)">详情</el-button>
+                  <el-button link type="primary" size="small"
+                             v-if="row.status === 2" @click="remind(row)">催办</el-button>
+                  <el-button link type="danger" size="small"
+                             v-if="row.status === 2" @click="cancelOrder(row)">撤销</el-button>
+                  <el-button link type="primary" size="small"
+                             v-if="row.status === 4" @click="confirmReceipt(row)">确认收货</el-button>
+                  <el-button link type="primary" size="small"
+                             v-if="row.status === 5" @click="repetition(row)">再次申领</el-button>
+                  <el-button link type="warning" size="small"
+                             v-if="row.status === 5" @click="openReturn(row)">退换</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="empty" v-else>暂无申领单</div>
+
+            <div style="margin-top:16px;text-align:right" v-if="orderTotal > 0">
+              <el-pagination layout="total, prev, pager, next" :total="orderTotal"
+                             :page-size="10" :current-page="orderPage"
+                             @current-change="loadOrders"></el-pagination>
+            </div>
+          </div>
+
+          <!-- 详情抽屉 -->
+          <el-drawer v-model="orderDrawer" title="申领单详情" size="480px">
+            <div v-if="currentOrder">
+              <div class="detail-row">
+                <div class="detail-label">申领单号</div>
+                <div class="detail-value">{{ currentOrder.number }}</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">状态</div>
+                <div class="detail-value">
+                  <el-tag :type="statusTagType(currentOrder.status)" size="small">
+                    {{ statusText(currentOrder.status) }}
+                  </el-tag>
+                </div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">申领金额</div>
+                <div class="detail-value" style="color:var(--danger)">￥{{ currentOrder.amount }}</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">收货位置</div>
+                <div class="detail-value">{{ currentOrder.address }}</div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-label">提交时间</div>
+                <div class="detail-value">{{ currentOrder.orderTime }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.approveTime">
+                <div class="detail-label">审批时间</div>
+                <div class="detail-value">{{ currentOrder.approveTime }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.remark">
+                <div class="detail-label">备注</div>
+                <div class="detail-value">{{ currentOrder.remark }}</div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.rejectionReason">
+                <div class="detail-label">驳回理由</div>
+                <div class="detail-value" style="color:var(--danger)">
+                  {{ currentOrder.rejectionReason }}
+                </div>
+              </div>
+              <div class="detail-row" v-if="currentOrder.cancelReason">
+                <div class="detail-label">取消原因</div>
+                <div class="detail-value">{{ currentOrder.cancelReason }}</div>
+              </div>
+              <div style="margin-top:16px">
+                <b style="font-size:13px">物资明细</b>
+                <el-table :data="currentOrder.orderDetailList || []" size="small" border style="margin-top:8px">
+                  <el-table-column prop="name" label="物资"></el-table-column>
+                  <el-table-column prop="number" label="数量" width="70"></el-table-column>
+                  <el-table-column prop="amount" label="单价" width="90"></el-table-column>
+                </el-table>
+              </div>
+            </div>
+          </el-drawer>
+        </template>
+
+        <!-- ---------- 收货地址 ---------- -->
+        <template v-if="page === 'address'">
+          <div class="page-card">
+            <div class="toolbar">
+              <b>收货地址</b>
+              <div class="toolbar-spacer"></div>
+              <el-button type="primary" @click="openAddress()">新增地址</el-button>
+            </div>
+            <el-table :data="addresses" border v-if="addresses.length">
+              <el-table-column prop="consignee" label="申领人" width="120"></el-table-column>
+              <el-table-column prop="deptName" label="部门" width="140"></el-table-column>
+              <el-table-column prop="station" label="工位" width="140"></el-table-column>
+              <el-table-column prop="detail" label="详细位置" min-width="180"></el-table-column>
+              <el-table-column prop="phone" label="联系电话" width="140"></el-table-column>
+              <el-table-column label="默认" width="80">
+                <template #default="{ row }">
+                  <el-tag v-if="row.isDefault === 1" type="success" size="small">默认</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="200" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="openAddress(row)">编辑</el-button>
+                  <el-button link type="primary" size="small"
+                             v-if="row.isDefault !== 1" @click="setDefault(row)">设为默认</el-button>
+                  <el-button link type="danger" size="small" @click="deleteAddress(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="empty" v-else>还没有收货地址，先添加一个</div>
+          </div>
+
+          <el-dialog v-model="addrDialog" :title="addrForm.id ? '编辑地址' : '新增地址'" width="520px">
+            <el-form :model="addrForm" label-width="90px">
+              <el-form-item label="申领人">
+                <el-input v-model="addrForm.consignee" placeholder="请输入申领人姓名"></el-input>
+              </el-form-item>
+              <el-form-item label="部门">
+                <el-input v-model="addrForm.deptName" placeholder="如：技术部"></el-input>
+              </el-form-item>
+              <el-form-item label="工位">
+                <el-input v-model="addrForm.station" placeholder="如：A座12层工位03"></el-input>
+              </el-form-item>
+              <el-form-item label="详细位置">
+                <el-input v-model="addrForm.detail" type="textarea" :rows="2"
+                          placeholder="请输入详细收货位置"></el-input>
+              </el-form-item>
+              <el-form-item label="联系电话">
+                <el-input v-model="addrForm.phone" placeholder="请输入手机号"></el-input>
+              </el-form-item>
+              <el-form-item label="设为默认">
+                <el-switch v-model="addrForm.isDefault" :active-value="1" :inactive-value="0"></el-switch>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="addrDialog = false">取消</el-button>
+              <el-button type="primary" :loading="addrSaving" @click="saveAddress">保存</el-button>
+            </template>
+          </el-dialog>
+        </template>
+
+        <!-- ---------- 预算 ---------- -->
+        <template v-if="page === 'budget'">
+          <div class="page-card" v-if="budget">
+            <div class="toolbar"><b>{{ budget.deptName }} · {{ budget.period }} 预算</b></div>
+            <div class="stat-row" style="grid-template-columns:repeat(3,1fr)">
+              <div class="stat-card">
+                <div class="stat-label">预算总额</div>
+                <div class="stat-num">￥{{ budget.totalAmount }}</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">已使用</div>
+                <div class="stat-num" style="color:var(--warning)">￥{{ budget.usedAmount }}</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">可用余额</div>
+                <div class="stat-num" style="color:var(--success)">￥{{ budget.remainAmount }}</div>
+              </div>
+            </div>
+            <el-progress :percentage="usedPercent" :stroke-width="16" style="margin-top:20px"></el-progress>
+            <p style="font-size:13px;color:var(--text-sub);margin-top:16px">
+              预算按「部门 + 月份」维度设置。提交申领单时预扣，审批驳回或撤销时自动返还。
+            </p>
+          </div>
+          <div class="page-card" v-else>
+            <div class="empty">本部门尚未设置预算，请联系行政管理员设置后再提交申领</div>
+          </div>
+        </template>
+
+      </main>
+    </div>
+
+    <!-- 悬浮申领车入口 -->
+    <div class="cart-float" v-if="page !== 'cart' && cartCount > 0" @click="go('cart')">
+      <span>🛒</span>
+      <span>申领车 {{ cartCount }} 件</span>
+    </div>
+
+    <!-- 退换申请 -->
+    <el-dialog v-model="returnDialog" title="发起退换" width="480px">
+      <el-form label-width="80px">
+        <el-form-item label="退换原因">
+          <el-input v-model="returnForm.reason" type="textarea" :rows="3"
+                    placeholder="请说明退换原因，例如：规格不符 / 有破损"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="returnDialog = false">取消</el-button>
+        <el-button type="primary" @click="doReturn">提交申请</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</div>
+
+<script src="https://unpkg.com/vue@3.4.15/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/element-plus@2.4.4/dist/index.full.min.js"></script>
+<script src="https://unpkg.com/element-plus@2.4.4/dist/locale/zh-cn.min.js"></script>
+<script src="app.js?v=20260929b"></script>
+</body>
+</html>

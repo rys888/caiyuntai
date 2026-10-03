@@ -1,0 +1,21 @@
+# ---- Java / Maven ----
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---- IDE ----
+.idea/
+*.iml
+.vscode/
+*.ipr
+*.iws
+
+# ---- macOS ----
+.DS_Store
+
+# ---- 运行期产物 ----
+front/nginx-1.20.2/logs/*.log
+front/nginx-1.20.2/logs/*.pid
+front/nginx-1.20.2/temp/
+*.log

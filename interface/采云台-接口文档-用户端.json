@@ -1,0 +1,1884 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "采云台 · 企业物资采购平台 —— 用户端（员工采购端）接口文档",
+    "version": "2.0",
+    "description": "用户端即员工采购端（普通员工），共 26 个接口。\n\n## 鉴权\n请求头 **`authentication: <JWT>`**，从 `POST /user/user/login` 返回的 `data.token` 获取，有效期 2 小时。\n注意与管理端不同：**请求头名和密钥都不一样，两端 token 不可混用**。\n\n## 免登录接口（2 个）\n- `POST /user/user/login`\n- `GET /user/shop/status`\n\n## 核心业务规则\n- **提交申领单**会按 `amount` **原子预扣部门预算**（条件 UPDATE + 影响行数判断），余额不足返回 `code=0`、`msg=部门预算余额不足，无法提交申领单`。\n- **驳回**与**撤销**会返还预算（payStatus → 2）；**完成收货后预算不返还**。重复撤销不会重复返还。\n- 申领车中同一物资重复加入会**累加数量**，不新增行。\n- **催办**仅写入单据 `remindTime`，不发送任何推送（原 WebSocket 已下线）。\n\n## 通用约定\n- 统一返回 `Result` 结构：`code=1` 成功；`code=0` 业务失败（**HTTP 仍为 200**），原因见 `msg`。\n- **HTTP 401 无响应体**：未登录，或 token 缺失/无效/过期（拦截器直接写状态码）。\n- 分页接口统一返回 `PageResult`：`total` + `records`。\n- 申领单状态 status：1待提交 / 2待审批 / 3采购中 / 4配送中 / 5已完成 / 6已取消。\n- 预算扣减 payStatus：0未扣减 / 1已扣减 / 2已返还。\n- 启用状态 status（分类·物资·组合包·员工）：1启用 / 0停用。\n",
+    "contact": {
+      "name": "采云台项目组"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8084",
+      "description": "直连后端 Spring Boot（推荐调试用）"
+    },
+    {
+      "url": "http://localhost:8083/api",
+      "description": "经 nginx 员工端反代（/api 等价于后端 /user）"
+    }
+  ],
+  "tags": [
+    {
+      "name": "员工端-登录",
+      "description": "账号密码登录"
+    },
+    {
+      "name": "员工端-物资浏览",
+      "description": "分类、物资、组合包"
+    },
+    {
+      "name": "员工端-申领车",
+      "description": "申领车增删查"
+    },
+    {
+      "name": "员工端-申领单",
+      "description": "提交、查询、撤销、收货、退换、催办"
+    },
+    {
+      "name": "员工端-地址簿",
+      "description": "收货地址维护"
+    },
+    {
+      "name": "员工端-预算",
+      "description": "本部门预算查询"
+    },
+    {
+      "name": "员工端-企业设置",
+      "description": "采购开关查询"
+    }
+  ],
+  "security": [],
+  "paths": {
+    "/user/user/login": {
+      "post": {
+        "tags": [
+          "员工端-登录"
+        ],
+        "summary": "员工登录（账号密码）",
+        "operationId": "userLogin",
+        "description": "免登录接口。任意在职员工均可登录员工端（不受角色限制）。原项目此处为微信登录，已改为账号密码。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmployeeLoginDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/EmployeeLoginVO"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/category/list": {
+      "get": {
+        "tags": [
+          "员工端-物资浏览"
+        ],
+        "summary": "查询物资分类",
+        "operationId": "userCategoryList",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "分类类型，不传查全部"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Category"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/goods/list": {
+      "get": {
+        "tags": [
+          "员工端-物资浏览"
+        ],
+        "summary": "根据分类 id 查询物资",
+        "operationId": "userGoodsList",
+        "description": "只返回**启用中**的物资。结果缓存在 Redis 键 `goods_<categoryId>`。不传 categoryId 可查全部。",
+        "parameters": [
+          {
+            "name": "categoryId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "example": 23
+            },
+            "description": "分类 id，不传查全部"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/GoodsVO"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/combo/list": {
+      "get": {
+        "tags": [
+          "员工端-物资浏览"
+        ],
+        "summary": "查询组合申领包",
+        "operationId": "userComboList",
+        "description": "只返回启用中的组合包。缓存在 `comboCache::<categoryId>`；不传 categoryId 时 key 归一为 `comboCache::all`。",
+        "parameters": [
+          {
+            "name": "categoryId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "example": 27
+            },
+            "description": "分类 id，不传查全部"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Combo"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/combo/goods/{id}": {
+      "get": {
+        "tags": [
+          "员工端-物资浏览"
+        ],
+        "summary": "查询组合包内物资明细",
+        "operationId": "userComboGoods",
+        "description": "返回物资数组（name/copies），不是组合包对象本身。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "组合包 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/GoodsItemVO"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/shoppingCart/add": {
+      "post": {
+        "tags": [
+          "员工端-申领车"
+        ],
+        "summary": "添加申领车",
+        "operationId": "userCartAdd",
+        "description": "同一物资重复加入会**累加数量**，不会新增行。goodsId 与 comboId 二选一。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShoppingCartDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/shoppingCart/list": {
+      "get": {
+        "tags": [
+          "员工端-申领车"
+        ],
+        "summary": "查看申领车",
+        "operationId": "userCartList",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ShoppingCart"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/shoppingCart/clean": {
+      "delete": {
+        "tags": [
+          "员工端-申领车"
+        ],
+        "summary": "清空申领车",
+        "operationId": "userCartClean",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/shoppingCart/sub": {
+      "post": {
+        "tags": [
+          "员工端-申领车"
+        ],
+        "summary": "删除申领车中一个物资",
+        "operationId": "userCartSub",
+        "description": "数量减 1，减到 0 时删除该行。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShoppingCartDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/submit": {
+      "post": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "提交申领单",
+        "operationId": "userOrderSubmit",
+        "description": "**核心接口**：提交时按 amount **原子预扣部门预算**（条件 UPDATE + 影响行数判断），预算不足返回 `code=0`、`msg=部门预算余额不足，无法提交申领单`。成功单据状态为 2（待审批），payStatus=1，并记录 requesterDept。申领车为空或收货地址为空会被拒。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrdersSubmitDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OrderSubmitVO"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/historyOrders": {
+      "get": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "我的申领单分页查询",
+        "operationId": "userOrderHistory",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "example": 1
+            },
+            "description": "页码"
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "example": 10
+            },
+            "description": "每页条数"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "状态筛选 1~6"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/PageResult"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/orderDetail/{id}": {
+      "get": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "查询申领单详情",
+        "operationId": "userOrderDetail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "申领单 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OrderVO"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/cancel/{id}": {
+      "put": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "撤销申领单",
+        "operationId": "userOrderCancel",
+        "description": "撤销会**返还已预扣预算**；状态已变更后重复撤销返回 code=0，且不会重复返还。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "申领单 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/repetition/{id}": {
+      "post": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "再次申领",
+        "operationId": "userOrderRepetition",
+        "description": "按历史单据重新加入申领车。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "申领单 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/confirmReceipt/{id}": {
+      "put": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "确认收货",
+        "operationId": "userOrderConfirmReceipt",
+        "description": "状态 4 → 5（已完成）。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "申领单 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/return/{id}": {
+      "post": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "发起退换",
+        "operationId": "userOrderReturn",
+        "description": "理由通过 query 参数 `reason` 传递。单据状态不支持退换时返回 `当前申领单状态不支持退换`。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "申领单 id"
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "退换理由"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/order/reminder/{id}": {
+      "get": {
+        "tags": [
+          "员工端-申领单"
+        ],
+        "summary": "催办",
+        "operationId": "userOrderReminder",
+        "description": "仅写入单据的 remindTime 字段，**不发送任何推送**（原 WebSocket 推送已下线）。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "申领单 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/addressBook/list": {
+      "get": {
+        "tags": [
+          "员工端-地址簿"
+        ],
+        "summary": "查询我的全部地址",
+        "operationId": "userAddressList",
+        "description": "userId 由后端从 token 自动填充。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/AddressBook"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/addressBook": {
+      "post": {
+        "tags": [
+          "员工端-地址簿"
+        ],
+        "summary": "新增地址",
+        "operationId": "userAddressSave",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressBook"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "员工端-地址簿"
+        ],
+        "summary": "根据 id 修改地址",
+        "operationId": "userAddressUpdate",
+        "description": "必须传 id。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressBook"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "员工端-地址簿"
+        ],
+        "summary": "根据 id 删除地址",
+        "operationId": "userAddressDelete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "地址 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/addressBook/{id}": {
+      "get": {
+        "tags": [
+          "员工端-地址簿"
+        ],
+        "summary": "根据 id 查询地址",
+        "operationId": "userAddressGetById",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "地址 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AddressBook"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/addressBook/default": {
+      "put": {
+        "tags": [
+          "员工端-地址簿"
+        ],
+        "summary": "设置默认地址",
+        "operationId": "userAddressSetDefault",
+        "description": "传 id 即可，其余字段可空。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressBook"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "员工端-地址簿"
+        ],
+        "summary": "查询默认地址",
+        "operationId": "userAddressGetDefault",
+        "description": "没有默认地址时返回 `code=0`、`msg=没有查询到默认地址`。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AddressBook"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/budget/my": {
+      "get": {
+        "tags": [
+          "员工端-预算"
+        ],
+        "summary": "查询本部门当月预算",
+        "operationId": "userBudgetMy",
+        "description": "提交申领单前的前置提示。员工无部门或未设置预算时 `data` 为 null。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BudgetVO"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "UserToken": []
+          }
+        ]
+      }
+    },
+    "/user/shop/status": {
+      "get": {
+        "tags": [
+          "员工端-企业设置"
+        ],
+        "summary": "获取采购开关",
+        "operationId": "userShopStatus",
+        "description": "免登录接口（拦截器已显式放行）。1=营业中，0=打烊中。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "integer",
+                          "description": "1=营业中，0=打烊中"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "UserToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "authentication",
+        "description": "员工端 JWT。登录 POST /user/user/login 后从 data.token 获取。有效期 7200000ms（2 小时）。任意在职员工均可获取。"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "未登录，或 token 缺失/无效/过期。**HTTP 401，无响应体**。管理端返回 401 的另一种情形：当前账号角色为 EMPLOYEE（普通员工不允许登录管理端）。"
+      }
+    },
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "description": "统一响应包装",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "description": "1=成功；0=业务失败",
+            "example": 1
+          },
+          "msg": {
+            "type": "string",
+            "nullable": true,
+            "description": "失败原因，成功时为 null",
+            "example": null
+          },
+          "data": {
+            "nullable": true,
+            "description": "业务数据，结构随接口而异"
+          }
+        }
+      },
+      "PageResult": {
+        "type": "object",
+        "description": "分页结果包装",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "总记录数",
+            "example": 12
+          },
+          "records": {
+            "type": "array",
+            "description": "当前页数据集合，元素结构随接口而定",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "EmployeeLoginDTO": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "登录账号",
+            "example": "admin"
+          },
+          "password": {
+            "type": "string",
+            "description": "登录密码（明文传输，库中存 MD5）",
+            "example": "123456"
+          }
+        }
+      },
+      "EmployeeLoginVO": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "example": 1
+          },
+          "userName": {
+            "type": "string",
+            "description": "登录账号",
+            "example": "admin"
+          },
+          "name": {
+            "type": "string",
+            "description": "姓名",
+            "example": "系统管理员"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "EMPLOYEE",
+              "PURCHASER",
+              "ADMIN"
+            ],
+            "example": "ADMIN"
+          },
+          "deptId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "example": 2
+          },
+          "deptName": {
+            "type": "string",
+            "nullable": true,
+            "description": "部门名称，无部门时为 null",
+            "example": "技术部"
+          },
+          "token": {
+            "type": "string",
+            "description": "JWT 令牌，后续请求放入对应请求头",
+            "example": "eyJhbGciOiJIUzI1NiJ9.xxxxx.yyyyy"
+          }
+        }
+      },
+      "BudgetVO": {
+        "type": "object",
+        "description": "员工端未设置预算时 data 为 null",
+        "properties": {
+          "deptId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "deptName": {
+            "type": "string",
+            "example": "技术部"
+          },
+          "period": {
+            "type": "string",
+            "example": "2026-09"
+          },
+          "totalAmount": {
+            "type": "number",
+            "example": 10000.0
+          },
+          "usedAmount": {
+            "type": "number",
+            "example": 35.0
+          },
+          "remainAmount": {
+            "type": "number",
+            "description": "剩余可用额度 = totalAmount - usedAmount",
+            "example": 9965.0
+          }
+        }
+      },
+      "Category": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "example": 23
+          },
+          "type": {
+            "type": "integer",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "example": "办公耗材"
+          },
+          "sort": {
+            "type": "integer",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer",
+            "description": "1=启用，0=停用"
+          },
+          "createTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updateTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createUser": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "updateUser": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "GoodsSpec": {
+        "type": "object",
+        "description": "物资规格项（原『口味』字段，改造后语义为规格）",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "goodsId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string",
+            "description": "规格名",
+            "example": "颜色"
+          },
+          "value": {
+            "type": "string",
+            "description": "规格值",
+            "example": "黑色"
+          }
+        }
+      },
+      "GoodsVO": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string",
+            "example": "中性签字笔"
+          },
+          "categoryId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "image": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "spec": {
+            "type": "string",
+            "nullable": true
+          },
+          "unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer"
+          },
+          "updateTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "categoryName": {
+            "type": "string",
+            "nullable": true,
+            "description": "分类名称"
+          },
+          "flavors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GoodsSpec"
+            }
+          }
+        }
+      },
+      "Combo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "categoryId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "image": {
+            "type": "string",
+            "nullable": true
+          },
+          "createTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updateTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createUser": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "updateUser": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "GoodsItemVO": {
+        "type": "object",
+        "description": "组合包内物资的展示结构（员工端查包明细用）",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "物资名称",
+            "example": "中性签字笔"
+          },
+          "copies": {
+            "type": "integer",
+            "description": "数量",
+            "example": 2
+          },
+          "image": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ShoppingCartDTO": {
+        "type": "object",
+        "description": "goodsId 与 comboId 二选一：加入物资填 goodsId，加入组合包填 comboId",
+        "properties": {
+          "goodsId": {
+            "type": "integer",
+            "format": "int64",
+            "example": 70
+          },
+          "comboId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "goodsSpec": {
+            "type": "string",
+            "description": "所选规格，如『黑色』"
+          }
+        }
+      },
+      "ShoppingCart": {
+        "type": "object",
+        "description": "申领车条目。同一物资重复加入会累加 number，不会新增一行",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string",
+            "description": "物资/组合包名称"
+          },
+          "userId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "员工 id"
+          },
+          "goodsId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "comboId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "goodsSpec": {
+            "type": "string",
+            "nullable": true
+          },
+          "number": {
+            "type": "integer",
+            "description": "数量",
+            "example": 2
+          },
+          "amount": {
+            "type": "number",
+            "nullable": true
+          },
+          "image": {
+            "type": "string",
+            "nullable": true
+          },
+          "createTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "OrdersSubmitDTO": {
+        "type": "object",
+        "required": [
+          "addressBookId",
+          "amount"
+        ],
+        "properties": {
+          "addressBookId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "收货地址 id（必填，为空会报『收货地址为空，不能提交申领单』）",
+            "example": 1
+          },
+          "payMethod": {
+            "type": "integer",
+            "description": "内部记账方式，改造后无实际支付含义，固定传 1",
+            "example": 1
+          },
+          "remark": {
+            "type": "string",
+            "example": "接口回归测试"
+          },
+          "estimatedDeliveryTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deliveryStatus": {
+            "type": "integer",
+            "description": "1=立即送出",
+            "example": 1
+          },
+          "tablewareNumber": {
+            "type": "integer",
+            "example": 0
+          },
+          "tablewareStatus": {
+            "type": "integer",
+            "example": 0
+          },
+          "packAmount": {
+            "type": "integer",
+            "example": 0
+          },
+          "amount": {
+            "type": "number",
+            "description": "申领单总额，提交时按此金额原子预扣部门预算",
+            "example": 35.0
+          }
+        }
+      },
+      "OrderDetail": {
+        "type": "object",
+        "description": "申领单明细行",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string",
+            "description": "物资/组合包名称"
+          },
+          "orderId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "goodsId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "comboId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "goodsSpec": {
+            "type": "string",
+            "nullable": true
+          },
+          "number": {
+            "type": "integer"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "image": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "OrderSubmitVO": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "新生成的申领单 id"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "orderAmount": {
+            "type": "number"
+          },
+          "orderTime": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OrderVO": {
+        "type": "object",
+        "description": "申领单详情。除 orderGoods、orderDetailList 外，其余单据字段与 Orders 一致（本实现为继承 Orders）",
+        "properties": {
+          "orderGoods": {
+            "type": "string",
+            "nullable": true,
+            "description": "物资概要文本"
+          },
+          "orderDetailList": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderDetail"
+            }
+          }
+        }
+      },
+      "AddressBook": {
+        "type": "object",
+        "description": "收货地址。deptName/station 为改造后新增字段，用于办公场景",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "userId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "所属员工 id，后端从 token 自动填充，无需前端传"
+          },
+          "consignee": {
+            "type": "string",
+            "description": "收货人",
+            "example": "张三"
+          },
+          "phone": {
+            "type": "string",
+            "example": "13800138000"
+          },
+          "sex": {
+            "type": "string",
+            "description": "1=男，0=女"
+          },
+          "provinceCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "provinceName": {
+            "type": "string",
+            "nullable": true
+          },
+          "cityCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "cityName": {
+            "type": "string",
+            "nullable": true
+          },
+          "districtCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "districtName": {
+            "type": "string",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "description": "详细地址",
+            "example": "A座12层技术部办公区"
+          },
+          "deptName": {
+            "type": "string",
+            "nullable": true,
+            "description": "部门名称",
+            "example": "技术部"
+          },
+          "station": {
+            "type": "string",
+            "nullable": true,
+            "description": "工位",
+            "example": "A座12层工位03"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true,
+            "description": "标签",
+            "example": "公司"
+          },
+          "isDefault": {
+            "type": "integer",
+            "description": "1=默认地址，0=非默认"
+          }
+        }
+      }
+    }
+  }
+}
