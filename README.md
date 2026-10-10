@@ -1,4 +1,4 @@
-# ☁️ 采云台 · CaiYunTai
+# ☁️ 采云台（CaiYunTai）
 
 > 基于 **Spring Boot + MyBatis + MySQL + Redis** 构建的企业办公物资申领与采购管理平台
 
