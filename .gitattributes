@@ -1,0 +1,41 @@
+# 统一换行符与文本规范化，避免 Windows/macOS 协作时出现整文件 diff
+* text=auto eol=lf
+
+# 明确按文本处理的源码与脚本
+*.java   text eol=lf
+*.xml    text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.properties text eol=lf
+*.sql    text eol=lf
+*.sh     text eol=lf
+*.md     text eol=lf
+*.json   text eol=lf
+*.html   text eol=lf
+*.css    text eol=lf
+*.js     text eol=lf
+.conf    text eol=lf
+*.conf   text eol=lf
+
+# 二进制文件：禁止换行符转换与文本 diff
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.svg    text
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.eot    binary
+*.jar    binary
+*.class  binary
+*.pid    binary
+
+# 让 GitHub 的语言统计更贴近真实代码量
+# nginx 自带配置/静态页属于第三方文件，不计入本项目语言占比
+front/nginx-1.20.2/conf/*      linguist-vendored
+front/nginx-1.20.2/html/50x.html linguist-vendored
+front/nginx-1.20.2/html/index.html linguist-vendored
+# Knife4j 导出的接口文档属生成物
+interface/*.json               linguist-generated
